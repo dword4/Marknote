@@ -6,12 +6,22 @@ on:
     tags: ["v*"]
   pull_request:
 
+# Each container job mounts the runner host's system CA bundle (read-only)
+# so that the internal CA cert is trusted for git, apt, and Node.js actions.
+#
+# One-time host setup on the runner machine:
+#   sudo cp root_ca.crt /usr/local/share/ca-certificates/
+#   sudo update-ca-certificates
+
 jobs:
   build-linux:
     name: Linux amd64
     runs-on: docker
     container:
       image: catthehacker/ubuntu:act-22.04
+      options: -v /etc/ssl/certs:/etc/ssl/certs:ro
+    env:
+      NODE_EXTRA_CA_CERTS: /etc/ssl/certs/ca-certificates.crt
     steps:
       - uses: actions/checkout@v4
 
@@ -40,6 +50,9 @@ jobs:
     runs-on: docker
     container:
       image: catthehacker/ubuntu:act-22.04
+      options: -v /etc/ssl/certs:/etc/ssl/certs:ro
+    env:
+      NODE_EXTRA_CA_CERTS: /etc/ssl/certs/ca-certificates.crt
     steps:
       - uses: actions/checkout@v4
 
@@ -69,12 +82,21 @@ jobs:
     runs-on: docker
     container:
       image: ghcr.io/shepherdjerred/macos-cross-compiler:latest
+      options: -v /etc/ssl/certs:/etc/ssl/certs:ro
+    env:
+      NODE_EXTRA_CA_CERTS: /etc/ssl/certs/ca-certificates.crt
+      GIT_SSL_CAINFO: /etc/ssl/certs/ca-certificates.crt
     steps:
-      # Use git directly — actions/checkout needs Node.js which this image lacks.
+      # Use git directly — actions/checkout is a JS action and this image
+      # does not ship Node.js. The mounted cert bundle makes git trust the CA.
       - name: Check out code
+        env:
+          TOKEN: ${{ github.token }}
+          SERVER_URL: ${{ github.server_url }}
         run: |
           git config --global --add safe.directory '*'
-          git clone "http://oauth2:${{ github.token }}@${{ github.server_url }}/${{ github.repository }}.git" .
+          HOST="${SERVER_URL#*://}"
+          git clone "https://oauth2:${TOKEN}@${HOST}/${{ github.repository }}.git" .
           git checkout "${{ github.sha }}"
 
       - name: Install Node.js (required by upload-artifact)
@@ -104,6 +126,9 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     container:
       image: catthehacker/ubuntu:act-22.04
+      options: -v /etc/ssl/certs:/etc/ssl/certs:ro
+    env:
+      NODE_EXTRA_CA_CERTS: /etc/ssl/certs/ca-certificates.crt
     steps:
       - uses: actions/download-artifact@v4
         with:
