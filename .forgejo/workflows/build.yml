@@ -6,12 +6,8 @@ on:
     tags: ["v*"]
   pull_request:
 
-# Each container job mounts the runner host's system CA bundle (read-only)
-# so that the internal CA cert is trusted for git, apt, and Node.js actions.
-#
-# One-time host setup on the runner machine:
-#   sudo cp root_ca.crt /usr/local/share/ca-certificates/
-#   sudo update-ca-certificates
+# secrets.ROOT_CA must contain the PEM-encoded certificate (paste the
+# contents of root_ca.crt as the secret value in Forgejo).
 
 jobs:
   build-linux:
@@ -19,16 +15,16 @@ jobs:
     runs-on: docker
     container:
       image: catthehacker/ubuntu:act-22.04
-      options: -v /etc/ssl/certs:/etc/ssl/certs:ro
     env:
-      NODE_EXTRA_CA_CERTS: /etc/ssl/certs/ca-certificates.crt
-      GIT_SSL_CAINFO: /etc/ssl/our_certs/root_ca.crt
+      NODE_EXTRA_CA_CERTS: /usr/local/share/ca-certificates/root_ca.crt
     steps:
-      - name: Create root_ca cert from Secret
+      - name: Install internal CA certificate
+        env:
+          ROOT_CA: ${{ secrets.ROOT_CA }}
         run: |
-          # Create a directory and write the secret
-          mkdir -p /etc/ssl/our_certs/
-          echo "${{ secrets.ROOT_CA }}" > ./etc/ssl/our_certs/root_ca.crt
+          echo "${ROOT_CA}" > /usr/local/share/ca-certificates/root_ca.crt
+          update-ca-certificates
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
@@ -56,10 +52,16 @@ jobs:
     runs-on: docker
     container:
       image: catthehacker/ubuntu:act-22.04
-      options: -v /etc/ssl/certs:/etc/ssl/certs:ro
     env:
-      NODE_EXTRA_CA_CERTS: /etc/ssl/certs/ca-certificates.crt
+      NODE_EXTRA_CA_CERTS: /usr/local/share/ca-certificates/root_ca.crt
     steps:
+      - name: Install internal CA certificate
+        env:
+          ROOT_CA: ${{ secrets.ROOT_CA }}
+        run: |
+          echo "${ROOT_CA}" > /usr/local/share/ca-certificates/root_ca.crt
+          update-ca-certificates
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
@@ -88,13 +90,20 @@ jobs:
     runs-on: docker
     container:
       image: ghcr.io/shepherdjerred/macos-cross-compiler:latest
-      options: -v /etc/ssl/certs:/etc/ssl/certs:ro
     env:
-      NODE_EXTRA_CA_CERTS: /etc/ssl/certs/ca-certificates.crt
-      GIT_SSL_CAINFO: /etc/ssl/certs/ca-certificates.crt
+      NODE_EXTRA_CA_CERTS: /usr/local/share/ca-certificates/root_ca.crt
+      GIT_SSL_CAINFO: /usr/local/share/ca-certificates/root_ca.crt
     steps:
+      - name: Install internal CA certificate
+        env:
+          ROOT_CA: ${{ secrets.ROOT_CA }}
+        run: |
+          mkdir -p /usr/local/share/ca-certificates
+          echo "${ROOT_CA}" > /usr/local/share/ca-certificates/root_ca.crt
+          update-ca-certificates
+
       # Use git directly — actions/checkout is a JS action and this image
-      # does not ship Node.js. The mounted cert bundle makes git trust the CA.
+      # does not ship Node.js. GIT_SSL_CAINFO above makes git trust the CA.
       - name: Check out code
         env:
           TOKEN: ${{ github.token }}
@@ -132,10 +141,16 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     container:
       image: catthehacker/ubuntu:act-22.04
-      options: -v /etc/ssl/certs:/etc/ssl/certs:ro
     env:
-      NODE_EXTRA_CA_CERTS: /etc/ssl/certs/ca-certificates.crt
+      NODE_EXTRA_CA_CERTS: /usr/local/share/ca-certificates/root_ca.crt
     steps:
+      - name: Install internal CA certificate
+        env:
+          ROOT_CA: ${{ secrets.ROOT_CA }}
+        run: |
+          echo "${ROOT_CA}" > /usr/local/share/ca-certificates/root_ca.crt
+          update-ca-certificates
+
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
