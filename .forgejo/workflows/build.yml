@@ -1,0 +1,139 @@
+# Build Marknote for Linux amd64, macOS arm64, and Windows amd64.
+#
+# Compatible with both GitHub Actions and Forgejo Actions — Forgejo resolves
+# workflow files from .github/workflows/ as well as .forgejo/workflows/.
+#
+# Fyne requires CGO, so each platform is compiled on its native runner rather
+# than cross-compiled. Artifacts are retained for 30 days on every pushed
+# commit; they are also attached to GitHub/Forgejo releases on tag pushes.
+
+name: Build
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── Linux amd64 ──────────────────────────────────────────────────
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            bin: marknote
+            artifact: marknote-linux-amd64
+
+          # ── macOS arm64 (Apple Silicon, M1+) ─────────────────────────────
+          # macos-14 is the first GitHub-hosted runner on Apple Silicon.
+          # On Forgejo, replace with whatever arm64 macOS runner label your
+          # instance provides (e.g. "macos-arm64" or "self-hosted-macos-arm64").
+          - os: macos-14
+            goos: darwin
+            goarch: arm64
+            bin: marknote
+            artifact: marknote-darwin-arm64
+
+          # ── Windows amd64 ────────────────────────────────────────────────
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            bin: marknote.exe
+            artifact: marknote-windows-amd64.exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable   # always the latest stable Go release
+          cache: true
+
+      # ── Linux: install Fyne's required system libraries ──────────────────
+      # Fyne needs OpenGL headers (libgl1-mesa-dev), X11 dev files (xorg-dev),
+      # and the keyboard-layout library (libxkbcommon-dev) to compile on Linux.
+      - name: Install Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y gcc libgl1-mesa-dev xorg-dev libxkbcommon-dev
+
+      # ── Windows: make MinGW-w64 GCC visible to CGO ───────────────────────
+      # GitHub-hosted Windows runners ship MSYS2 at C:\msys64.
+      # We prepend its MinGW-w64 bin directory so `gcc` is found by CGO.
+      # On Forgejo self-hosted runners that don't have MSYS2, the step falls
+      # back to installing MinGW-w64 via Chocolatey.
+      - name: Configure MinGW-w64 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (Test-Path "C:\msys64\mingw64\bin\gcc.exe") {
+            Write-Output "Using pre-installed MSYS2 MinGW-w64"
+            Add-Content $env:GITHUB_PATH "C:\msys64\mingw64\bin"
+          } else {
+            Write-Output "MSYS2 not found — installing MinGW via Chocolatey"
+            choco install mingw --no-progress -y
+          }
+
+      # ── Build ─────────────────────────────────────────────────────────────
+      # -trimpath  strips local file-system paths from the binary (reproducible).
+      # -s -w      strip debug symbols and DWARF info (smaller binary).
+      # -H windowsgui  suppresses the Windows console window (Windows only).
+      #
+      # shell: bash is used on all runners so the ldflags logic is portable
+      # (Git Bash is available on GitHub/Forgejo Windows runners).
+      - name: Build
+        shell: bash
+        env:
+          CGO_ENABLED: "1"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          LDFLAGS="-s -w"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            LDFLAGS="$LDFLAGS -H=windowsgui"
+          fi
+          go build -v -trimpath -ldflags="$LDFLAGS" -o "${{ matrix.bin }}" .
+
+      # ── Upload artifact ───────────────────────────────────────────────────
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.bin }}
+          if-no-files-found: error
+          retention-days: 30
+
+  # ── Attach binaries to a GitHub/Forgejo release on tag push ──────────────
+  # This job only runs when a tag matching v* is pushed (e.g. v1.0.0).
+  # It downloads all three artifacts produced by the build job and attaches
+  # them to the release that was automatically created for the tag.
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+
+      - name: Create release and upload binaries
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**/*
+          generate_release_notes: true
