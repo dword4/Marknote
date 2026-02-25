@@ -22,7 +22,13 @@ jobs:
       options: -v /etc/ssl/certs:/etc/ssl/certs:ro
     env:
       NODE_EXTRA_CA_CERTS: /etc/ssl/certs/ca-certificates.crt
+      GIT_SSL_CAINFO: /etc/ssl/our_certs/root_ca.crt
     steps:
+      - name: Create root_ca cert from Secret
+        run: |
+          # Create a directory and write the secret
+          mkdir -p /etc/ssl/our_certs/
+          echo "${{ secrets.ROOT_CA }}" > ./etc/ssl/our_certs/root_ca.crt
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
