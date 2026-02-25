@@ -42,7 +42,7 @@ jobs:
           CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
             go build -v -o marknote-linux-amd64 .
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v3
         with:
           name: marknote-linux-amd64
           path: marknote-linux-amd64
@@ -80,7 +80,7 @@ jobs:
             CC=x86_64-w64-mingw32-gcc \
             go build -v -o marknote-windows-amd64.exe .
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v3
         with:
           name: marknote-windows-amd64
           path: marknote-windows-amd64.exe
@@ -129,7 +129,7 @@ jobs:
             CC=aarch64-apple-darwin22-clang \
             go build -v -o marknote-darwin-arm64 .
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v3
         with:
           name: marknote-darwin-arm64
           path: marknote-darwin-arm64
@@ -151,9 +151,20 @@ jobs:
           echo "${ROOT_CA}" > /usr/local/share/ca-certificates/root_ca.crt
           update-ca-certificates
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v3
         with:
-          merge-multiple: true
+          name: marknote-linux-amd64
+          path: .
+
+      - uses: actions/download-artifact@v3
+        with:
+          name: marknote-windows-amd64
+          path: .
+
+      - uses: actions/download-artifact@v3
+        with:
+          name: marknote-darwin-arm64
+          path: .
 
       - uses: softprops/action-gh-release@v2
         with:
