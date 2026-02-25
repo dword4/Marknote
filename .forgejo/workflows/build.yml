@@ -11,11 +11,15 @@ jobs:
     name: Linux amd64
     runs-on: docker
     container:
-      image: golang:1.23-bookworm
+      image: catthehacker/ubuntu:act-22.04
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Install build dependencies
         run: |
           apt-get update -qq
           apt-get install -y --no-install-recommends \
@@ -26,8 +30,7 @@ jobs:
           CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
             go build -v -o marknote-linux-amd64 .
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: marknote-linux-amd64
           path: marknote-linux-amd64
@@ -36,9 +39,13 @@ jobs:
     name: Windows amd64
     runs-on: docker
     container:
-      image: golang:1.23-bookworm
+      image: catthehacker/ubuntu:act-22.04
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
 
       - name: Install cross-compilation toolchain
         run: |
@@ -52,8 +59,7 @@ jobs:
             CC=x86_64-w64-mingw32-gcc \
             go build -v -o marknote-windows-amd64.exe .
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: marknote-windows-amd64
           path: marknote-windows-amd64.exe
@@ -64,10 +70,19 @@ jobs:
     container:
       image: ghcr.io/shepherdjerred/macos-cross-compiler:latest
     steps:
-      - uses: actions/checkout@v4
+      # Use git directly — actions/checkout needs Node.js which this image lacks.
+      - name: Check out code
+        run: |
+          git config --global --add safe.directory '*'
+          git clone "http://oauth2:${{ github.token }}@${{ github.server_url }}/${{ github.repository }}.git" .
+          git checkout "${{ github.sha }}"
 
-      - name: Install Go
-        uses: actions/setup-go@v5
+      - name: Install Node.js (required by upload-artifact)
+        run: |
+          apt-get update -qq
+          apt-get install -y --no-install-recommends nodejs
+
+      - uses: actions/setup-go@v5
         with:
           go-version: "1.23"
 
@@ -77,8 +92,7 @@ jobs:
             CC=aarch64-apple-darwin22-clang \
             go build -v -o marknote-darwin-arm64 .
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: marknote-darwin-arm64
           path: marknote-darwin-arm64
@@ -88,14 +102,14 @@ jobs:
     runs-on: docker
     needs: [build-linux, build-windows, build-macos]
     if: startsWith(github.ref, 'refs/tags/v')
+    container:
+      image: catthehacker/ubuntu:act-22.04
     steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
 
-      - name: Create release
-        uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v2
         with:
           files: |
             marknote-linux-amd64
