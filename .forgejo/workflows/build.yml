@@ -89,7 +89,7 @@ jobs:
     name: macOS arm64
     runs-on: docker
     container:
-      image: ghcr.io/shepherdjerred/macos-cross-compiler:latest
+      image: registry.int.itsn.network:5000/macos-cross-compiler:latest
     env:
       NODE_EXTRA_CA_CERTS: /usr/local/share/ca-certificates/root_ca.crt
       GIT_SSL_CAINFO: /usr/local/share/ca-certificates/root_ca.crt
