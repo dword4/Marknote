@@ -128,7 +128,7 @@ jobs:
         run: |
           CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
             CC=aarch64-apple-darwin22-clang \
-            go build -v -o marknote-darwin-arm64 .
+            go build -v -x -o marknote-darwin-arm64 .
 
       - uses: actions/upload-artifact@v3
         with:
