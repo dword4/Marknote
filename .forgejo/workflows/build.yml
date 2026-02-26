@@ -90,6 +90,7 @@ jobs:
     runs-on: docker
     container:
       image: registry.int.itsn.network:5000/macos-cross-compiler:latest
+      pull_policy: if-not-present
     env:
       NODE_EXTRA_CA_CERTS: /usr/local/share/ca-certificates/root_ca.crt
       GIT_SSL_CAINFO: /usr/local/share/ca-certificates/root_ca.crt
@@ -116,8 +117,8 @@ jobs:
 
       - name: Install Node.js (required by upload-artifact)
         run: |
-          apt-get update -qq
-          apt-get install -y --no-install-recommends nodejs
+          apt-get update -qq -o Acquire::AllowInsecureRepositories=true
+          apt-get install -y --no-install-recommends --allow-unauthenticated nodejs
 
       - uses: actions/setup-go@v5
         with:
