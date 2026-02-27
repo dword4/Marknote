@@ -85,70 +85,70 @@ jobs:
           name: marknote-windows-amd64
           path: marknote-windows-amd64.exe
 
-  build-macos:
-    name: macOS arm64
-    runs-on: docker
-    container:
-      image: registry.int.itsn.network:5000/macos-cross-compiler:latest
-      pull_policy: if-not-present
-    env:
-      NODE_EXTRA_CA_CERTS: /usr/local/share/ca-certificates/root_ca.crt
-      GIT_SSL_CAINFO: /usr/local/share/ca-certificates/root_ca.crt
-    steps:
-      - name: Install internal CA certificate
-        env:
-          ROOT_CA: ${{ secrets.ROOT_CA }}
-        run: |
-          mkdir -p /usr/local/share/ca-certificates
-          echo "${ROOT_CA}" > /usr/local/share/ca-certificates/root_ca.crt
-          update-ca-certificates
-
-      # Use git directly — actions/checkout is a JS action and this image
-      # does not ship Node.js. GIT_SSL_CAINFO above makes git trust the CA.
-      - name: Check out code
-        env:
-          TOKEN: ${{ github.token }}
-          SERVER_URL: ${{ github.server_url }}
-        run: |
-          git config --global --add safe.directory '*'
-          HOST="${SERVER_URL#*://}"
-          git clone "https://oauth2:${TOKEN}@${HOST}/${{ github.repository }}.git" .
-          git checkout "${{ github.sha }}"
-
-      - name: Install Node.js (required by upload-artifact)
-        run: |
-          apt-get update -qq -o Acquire::AllowInsecureRepositories=true
-          apt-get install -y --no-install-recommends --allow-unauthenticated nodejs
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.23"
-
-      - name: Add cross-compiler to PATH
-        run: |
-          COMPILER=$(find /usr /opt /osxcross -name "aarch64-apple-darwin*-clang" 2>/dev/null | head -1)
-          if [ -z "$COMPILER" ]; then
-            echo "Cross-compiler not found!" && exit 1
-          fi
-          echo "Found compiler at: $COMPILER"
-          echo "$(dirname "$COMPILER")" >> $GITHUB_PATH
-
-      - name: Build
-        run: |
-          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
-            CC=aarch64-apple-darwin22-clang \
-            go build -v -o marknote-darwin-arm64 . 2>build_errors.log || \
-            (cat build_errors.log && exit 1)
-
-      - uses: actions/upload-artifact@v3
-        with:
-          name: marknote-darwin-arm64
-          path: marknote-darwin-arm64
+  # build-macos:
+  #   name: macOS arm64
+  #   runs-on: docker
+  #   container:
+  #     image: registry.int.itsn.network:5000/macos-cross-compiler:latest
+  #     pull_policy: if-not-present
+  #   env:
+  #     NODE_EXTRA_CA_CERTS: /usr/local/share/ca-certificates/root_ca.crt
+  #     GIT_SSL_CAINFO: /usr/local/share/ca-certificates/root_ca.crt
+  #   steps:
+  #     - name: Install internal CA certificate
+  #       env:
+  #         ROOT_CA: ${{ secrets.ROOT_CA }}
+  #       run: |
+  #         mkdir -p /usr/local/share/ca-certificates
+  #         echo "${ROOT_CA}" > /usr/local/share/ca-certificates/root_ca.crt
+  #         update-ca-certificates
+  #
+  #     # Use git directly — actions/checkout is a JS action and this image
+  #     # does not ship Node.js. GIT_SSL_CAINFO above makes git trust the CA.
+  #     - name: Check out code
+  #       env:
+  #         TOKEN: ${{ github.token }}
+  #         SERVER_URL: ${{ github.server_url }}
+  #       run: |
+  #         git config --global --add safe.directory '*'
+  #         HOST="${SERVER_URL#*://}"
+  #         git clone "https://oauth2:${TOKEN}@${HOST}/${{ github.repository }}.git" .
+  #         git checkout "${{ github.sha }}"
+  #
+  #     - name: Install Node.js (required by upload-artifact)
+  #       run: |
+  #         apt-get update -qq -o Acquire::AllowInsecureRepositories=true
+  #         apt-get install -y --no-install-recommends --allow-unauthenticated nodejs
+  #
+  #     - uses: actions/setup-go@v5
+  #       with:
+  #         go-version: "1.23"
+  #
+  #     - name: Add cross-compiler to PATH
+  #       run: |
+  #         COMPILER=$(find /usr /opt /osxcross -name "aarch64-apple-darwin*-clang" 2>/dev/null | head -1)
+  #         if [ -z "$COMPILER" ]; then
+  #           echo "Cross-compiler not found!" && exit 1
+  #         fi
+  #         echo "Found compiler at: $COMPILER"
+  #         echo "$(dirname "$COMPILER")" >> $GITHUB_PATH
+  #
+  #     - name: Build
+  #       run: |
+  #         CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
+  #           CC=aarch64-apple-darwin22-clang \
+  #           go build -v -o marknote-darwin-arm64 . 2>build_errors.log || \
+  #           (cat build_errors.log && exit 1)
+  #
+  #     - uses: actions/upload-artifact@v3
+  #       with:
+  #         name: marknote-darwin-arm64
+  #         path: marknote-darwin-arm64
 
   release:
     name: Release
     runs-on: docker
-    needs: [build-linux, build-windows, build-macos]
+    needs: [build-linux, build-windows]
     if: startsWith(github.ref, 'refs/tags/v')
     container:
       image: catthehacker/ubuntu:act-22.04
@@ -172,14 +172,14 @@ jobs:
           name: marknote-windows-amd64
           path: .
 
-      - uses: actions/download-artifact@v3
-        with:
-          name: marknote-darwin-arm64
-          path: .
+      # - uses: actions/download-artifact@v3
+      #   with:
+      #     name: marknote-darwin-arm64
+      #     path: .
 
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             marknote-linux-amd64
             marknote-windows-amd64.exe
-            marknote-darwin-arm64
+            # marknote-darwin-arm64

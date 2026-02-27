@@ -1,225 +1,359 @@
 package main
 
 import (
+	"fmt"
+	"image"
+	"image/color"
 	"strings"
 
-	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/widget"
+	"gioui.org/font"
+	"gioui.org/layout"
+	"gioui.org/op"
+	"gioui.org/op/clip"
+	"gioui.org/op/paint"
+	"gioui.org/unit"
+	"gioui.org/widget/material"
+
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/extension"
+	extast "github.com/yuin/goldmark/extension/ast"
+	gmtext "github.com/yuin/goldmark/text"
 )
 
-// updatePreview rebuilds the preview VBox from the given markdown content.
-func (a *App) updatePreview(content string) {
-	a.previewBox.Objects = renderMarkdown(content)
-	a.previewBox.Refresh()
+// renderedBlock is a drawable block-level element of the preview pane.
+type renderedBlock interface {
+	Layout(gtx layout.Context, th *material.Theme) layout.Dimensions
 }
 
-// renderMarkdown splits content into table and non-table blocks, renders each,
-// and returns the combined slice of Fyne canvas objects.
-func renderMarkdown(content string) []fyne.CanvasObject {
+// ---------------------------------------------------------------------------
+// Block types
+// ---------------------------------------------------------------------------
+
+type headingBlock struct {
+	level int
+	body  string
+}
+
+type paragraphBlock struct {
+	body string
+}
+
+type codeBlock struct {
+	code string
+}
+
+type hrBlock struct{}
+
+type tableBlock struct {
+	headers []string
+	rows    [][]string
+	numCols int
+}
+
+type listGroupBlock struct {
+	items []listItemBlock
+}
+
+type listItemBlock struct {
+	indent int
+	bullet string
+	body   string
+}
+
+type blockquoteBlock struct {
+	body string
+}
+
+// ---------------------------------------------------------------------------
+// Parser (package-level so it's allocated once)
+// ---------------------------------------------------------------------------
+
+var mdParser = goldmark.New(
+	goldmark.WithExtensions(
+		extension.Table,
+		extension.Strikethrough,
+	),
+)
+
+// renderMarkdown parses markdown and returns a slice of renderedBlocks.
+func renderMarkdown(content string) []renderedBlock {
 	if strings.TrimSpace(content) == "" {
 		return nil
 	}
+	src := []byte(content)
+	reader := gmtext.NewReader(src)
+	doc := mdParser.Parser().Parse(reader)
 
-	var objects []fyne.CanvasObject
-	for _, block := range splitMarkdownBlocks(content) {
-		if block.isTable {
-			if obj := renderTableBlock(block.lines); obj != nil {
-				objects = append(objects, obj)
-			}
-		} else {
-			text := strings.TrimSpace(strings.Join(block.lines, "\n"))
-			if text != "" {
-				rt := widget.NewRichTextFromMarkdown(text)
-				rt.Wrapping = fyne.TextWrapWord
-				objects = append(objects, rt)
-			}
+	var blocks []renderedBlock
+	for n := doc.FirstChild(); n != nil; n = n.NextSibling() {
+		if b := nodeToBlock(n, src, 0); b != nil {
+			blocks = append(blocks, b)
 		}
-	}
-	return objects
-}
-
-// mdBlock is a contiguous run of lines that are either all table or all non-table.
-type mdBlock struct {
-	isTable bool
-	lines   []string
-}
-
-// splitMarkdownBlocks partitions the markdown source into alternating table and
-// non-table blocks. Tables are identified by their GFM separator row (cells of
-// dashes/colons separated by |). Code fences are tracked so that | inside a
-// fenced block is never mistaken for a table separator.
-func splitMarkdownBlocks(content string) []mdBlock {
-	lines := strings.Split(content, "\n")
-	if len(lines) == 0 {
-		return nil
-	}
-
-	// Pass 1: track which lines are inside a code fence.
-	inFence := make([]bool, len(lines))
-	fenceActive := false
-	for i, line := range lines {
-		t := strings.TrimSpace(line)
-		if strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~") {
-			fenceActive = !fenceActive
-		}
-		inFence[i] = fenceActive
-	}
-
-	// Pass 2: find separator rows outside fences.
-	separatorAt := make(map[int]bool)
-	for i, line := range lines {
-		if !inFence[i] && isSeparatorRow(line) {
-			separatorAt[i] = true
-		}
-	}
-
-	// Pass 3: mark table lines — the separator row plus adjacent non-blank lines
-	// above (header) and below (data rows).
-	isTableLine := make([]bool, len(lines))
-	for sepIdx := range separatorAt {
-		isTableLine[sepIdx] = true
-		for i := sepIdx - 1; i >= 0; i-- {
-			if strings.TrimSpace(lines[i]) == "" {
-				break
-			}
-			isTableLine[i] = true
-		}
-		for i := sepIdx + 1; i < len(lines); i++ {
-			if strings.TrimSpace(lines[i]) == "" {
-				break
-			}
-			isTableLine[i] = true
-		}
-	}
-
-	// Pass 4: group consecutive same-type lines into blocks.
-	var blocks []mdBlock
-	current := []string{lines[0]}
-	currentIsTable := isTableLine[0]
-
-	for i := 1; i < len(lines); i++ {
-		if isTableLine[i] != currentIsTable {
-			blocks = append(blocks, mdBlock{isTable: currentIsTable, lines: current})
-			current = nil
-			currentIsTable = isTableLine[i]
-		}
-		current = append(current, lines[i])
-	}
-	if len(current) > 0 {
-		blocks = append(blocks, mdBlock{isTable: currentIsTable, lines: current})
 	}
 	return blocks
 }
 
-// isSeparatorRow returns true when the line is a GFM table separator such as
-// |---|:---:|---:| or --- | --- (with or without surrounding pipes).
-func isSeparatorRow(line string) bool {
-	t := strings.TrimSpace(line)
-	if !strings.Contains(t, "-") {
-		return false
-	}
-	t = strings.Trim(t, "|")
-	if t == "" {
-		return false
-	}
-	for _, cell := range strings.Split(t, "|") {
-		cell = strings.TrimSpace(cell)
-		if cell == "" {
-			return false // empty cell — not a valid separator
-		}
-		for _, ch := range cell {
-			if ch != '-' && ch != ':' {
-				return false
+func nodeToBlock(n ast.Node, src []byte, listDepth int) renderedBlock {
+	switch n := n.(type) {
+	case *ast.Heading:
+		return &headingBlock{level: n.Level, body: extractText(n, src)}
+
+	case *ast.Paragraph:
+		return &paragraphBlock{body: extractText(n, src)}
+
+	case *ast.FencedCodeBlock:
+		return &codeBlock{code: extractCodeLines(n, src)}
+
+	case *ast.CodeBlock:
+		return &codeBlock{code: extractCodeLines(n, src)}
+
+	case *ast.ThematicBreak:
+		return &hrBlock{}
+
+	case *ast.Blockquote:
+		return &blockquoteBlock{body: extractText(n, src)}
+
+	case *ast.List:
+		var items []listItemBlock
+		counter := 1
+		for child := n.FirstChild(); child != nil; child = child.NextSibling() {
+			li, ok := child.(*ast.ListItem)
+			if !ok {
+				continue
 			}
+			bullet := "• "
+			if n.IsOrdered() {
+				bullet = fmt.Sprintf("%d. ", counter)
+				counter++
+			}
+			items = append(items, listItemBlock{
+				indent: listDepth,
+				bullet: bullet,
+				body:   extractText(li, src),
+			})
 		}
-		if !strings.Contains(cell, "-") {
-			return false // must have at least one dash
-		}
+		return &listGroupBlock{items: items}
+
+	case *extast.Table:
+		return buildTableBlock(n, src)
 	}
-	return true
+	return nil
 }
 
-// renderTableBlock parses the raw table lines and returns a Fyne widget that
-// renders the table with bold headers, a separator, and plain data rows.
-func renderTableBlock(lines []string) fyne.CanvasObject {
-	headers, dataRows, numCols := parseTable(lines)
-	if numCols == 0 {
-		return nil
-	}
+// ---------------------------------------------------------------------------
+// Text extraction
+// ---------------------------------------------------------------------------
 
-	var rows []fyne.CanvasObject
-
-	// Header row — bold labels
-	headerCells := make([]fyne.CanvasObject, numCols)
-	for i := range headerCells {
-		lbl := widget.NewLabel(cellAt(headers, i))
-		lbl.TextStyle = fyne.TextStyle{Bold: true}
-		lbl.Wrapping = fyne.TextWrapWord
-		headerCells[i] = lbl
-	}
-	rows = append(rows, container.NewGridWithColumns(numCols, headerCells...))
-	rows = append(rows, widget.NewSeparator())
-
-	// Data rows
-	for _, dataRow := range dataRows {
-		cells := make([]fyne.CanvasObject, numCols)
-		for i := range cells {
-			lbl := widget.NewLabel(cellAt(dataRow, i))
-			lbl.Wrapping = fyne.TextWrapWord
-			cells[i] = lbl
+func extractText(n ast.Node, src []byte) string {
+	var b strings.Builder
+	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+		switch tc := c.(type) {
+		case *ast.Text:
+			b.Write(tc.Segment.Value(src))
+			if tc.HardLineBreak() || tc.SoftLineBreak() {
+				b.WriteByte('\n')
+			}
+		case *ast.String:
+			b.Write(tc.Value)
+		case *ast.RawHTML:
+			// skip
+		default:
+			b.WriteString(extractText(c, src))
 		}
-		rows = append(rows, container.NewGridWithColumns(numCols, cells...))
 	}
-
-	return container.NewPadded(container.NewVBox(rows...))
+	return strings.TrimSpace(b.String())
 }
 
-// parseTable splits the raw table lines into headers, data rows, and the
-// maximum column count. The separator row is consumed but not stored.
-func parseTable(lines []string) (headers []string, dataRows [][]string, numCols int) {
-	separatorSeen := false
-	for _, line := range lines {
-		if !strings.Contains(line, "|") {
-			continue
+func extractCodeLines(n ast.Node, src []byte) string {
+	var b strings.Builder
+	for i := 0; i < n.Lines().Len(); i++ {
+		line := n.Lines().At(i)
+		b.Write(line.Value(src))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// ---------------------------------------------------------------------------
+// Table
+// ---------------------------------------------------------------------------
+
+func buildTableBlock(n *extast.Table, src []byte) *tableBlock {
+	tb := &tableBlock{}
+	for row := n.FirstChild(); row != nil; row = row.NextSibling() {
+		var cells []string
+		for cell := row.FirstChild(); cell != nil; cell = cell.NextSibling() {
+			cells = append(cells, extractText(cell, src))
 		}
-		if isSeparatorRow(line) {
-			separatorSeen = true
-			continue
+		if len(cells) > tb.numCols {
+			tb.numCols = len(cells)
 		}
-		cells := parseTableRow(line)
-		if !separatorSeen {
-			headers = cells
+		if _, ok := row.(*extast.TableHeader); ok {
+			tb.headers = cells
 		} else {
-			dataRows = append(dataRows, cells)
-		}
-		if len(cells) > numCols {
-			numCols = len(cells)
+			tb.rows = append(tb.rows, cells)
 		}
 	}
-	if len(headers) > numCols {
-		numCols = len(headers)
-	}
-	return
+	return tb
 }
 
-// parseTableRow splits a raw table row string (e.g. "| a | b | c |") into
-// a slice of trimmed cell strings.
-func parseTableRow(line string) []string {
-	line = strings.TrimSpace(line)
-	line = strings.Trim(line, "|")
-	parts := strings.Split(line, "|")
-	cells := make([]string, len(parts))
-	for i, p := range parts {
-		cells[i] = strings.TrimSpace(p)
+// ---------------------------------------------------------------------------
+// Layout implementations
+// ---------------------------------------------------------------------------
+
+var headingSizes = [7]unit.Sp{0, 22, 19, 16, 15, 14, 13}
+
+func (b *headingBlock) Layout(gtx layout.Context, th *material.Theme) layout.Dimensions {
+	lvl := b.level
+	if lvl < 1 {
+		lvl = 1
 	}
-	return cells
+	if lvl > 6 {
+		lvl = 6
+	}
+	return layout.Inset{Top: unit.Dp(8), Bottom: unit.Dp(2)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		lbl := material.Label(th, headingSizes[lvl], b.body)
+		lbl.Font = font.Font{Weight: font.Bold}
+		return lbl.Layout(gtx)
+	})
 }
 
-// cellAt returns cells[i] or "" if i is out of range.
-func cellAt(cells []string, i int) string {
-	if i < len(cells) {
-		return cells[i]
+func (b *paragraphBlock) Layout(gtx layout.Context, th *material.Theme) layout.Dimensions {
+	lbl := material.Label(th, unit.Sp(14), b.body)
+	lbl.MaxLines = 0
+	return lbl.Layout(gtx)
+}
+
+func (b *codeBlock) Layout(gtx layout.Context, th *material.Theme) layout.Dimensions {
+	return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return withBackground(gtx, darkenColor(th.Palette.Bg, 18), unit.Dp(8), func(gtx layout.Context) layout.Dimensions {
+			lbl := material.Label(th, unit.Sp(12), b.code)
+			lbl.MaxLines = 0
+			lbl.Font = font.Font{Typeface: "Go Mono"}
+			return lbl.Layout(gtx)
+		})
+	})
+}
+
+func (b *hrBlock) Layout(gtx layout.Context, th *material.Theme) layout.Dimensions {
+	return layout.Inset{Top: unit.Dp(8), Bottom: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		size := image.Pt(gtx.Constraints.Max.X, gtx.Dp(1))
+		paint.FillShape(gtx.Ops, mulAlpha(th.Palette.Fg, 80), clip.Rect{Max: size}.Op())
+		return layout.Dimensions{Size: size}
+	})
+}
+
+func (b *listGroupBlock) Layout(gtx layout.Context, th *material.Theme) layout.Dimensions {
+	items := b.items
+	var children []layout.FlexChild
+	for i := range items {
+		it := &items[i]
+		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return it.Layout(gtx, th)
+		}))
 	}
-	return ""
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+}
+
+func (b *listItemBlock) Layout(gtx layout.Context, th *material.Theme) layout.Dimensions {
+	indent := unit.Dp(float32(b.indent*16 + 8))
+	return layout.Inset{Left: indent}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return material.Label(th, unit.Sp(14), b.bullet).Layout(gtx)
+			}),
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Label(th, unit.Sp(14), b.body)
+				lbl.MaxLines = 0
+				return lbl.Layout(gtx)
+			}),
+		)
+	})
+}
+
+func (b *blockquoteBlock) Layout(gtx layout.Context, th *material.Theme) layout.Dimensions {
+	return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			size := image.Pt(gtx.Dp(4), 1)
+			paint.FillShape(gtx.Ops, mulAlpha(th.Palette.ContrastBg, 200),
+				clip.Rect{Max: size}.Op())
+			return layout.Dimensions{Size: image.Pt(gtx.Dp(12), size.Y)}
+		}),
+		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			lbl := material.Label(th, unit.Sp(13), b.body)
+			lbl.Color = mulAlpha(th.Palette.Fg, 180)
+			lbl.MaxLines = 0
+			return lbl.Layout(gtx)
+		}),
+	)
+}
+
+func (b *tableBlock) Layout(gtx layout.Context, th *material.Theme) layout.Dimensions {
+	return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		if b.numCols == 0 {
+			return layout.Dimensions{}
+		}
+		colW := gtx.Constraints.Max.X / b.numCols
+
+		// Capture header row height using op.Record, so we can draw a separator.
+		var rows []layout.FlexChild
+
+		headerCells := b.headers
+		numCols := b.numCols
+		rows = append(rows, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return tableRow(gtx, th, headerCells, numCols, colW, true)
+		}))
+		rows = append(rows, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			size := image.Pt(gtx.Constraints.Max.X, gtx.Dp(1))
+			paint.FillShape(gtx.Ops, mulAlpha(th.Palette.Fg, 100), clip.Rect{Max: size}.Op())
+			return layout.Dimensions{Size: image.Pt(size.X, gtx.Dp(4))}
+		}))
+		for _, dr := range b.rows {
+			cells := dr
+			rows = append(rows, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return tableRow(gtx, th, cells, numCols, colW, false)
+			}))
+		}
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx, rows...)
+	})
+}
+
+func tableRow(gtx layout.Context, th *material.Theme, cells []string, numCols, colW int, header bool) layout.Dimensions {
+	var cols []layout.FlexChild
+	for i := 0; i < numCols; i++ {
+		idx := i
+		cell := ""
+		if idx < len(cells) {
+			cell = cells[idx]
+		}
+		cols = append(cols, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			gtx.Constraints.Max.X = colW
+			gtx.Constraints.Min.X = colW
+			return layout.UniformInset(unit.Dp(3)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Label(th, unit.Sp(13), cell)
+				if header {
+					lbl.Font = font.Font{Weight: font.Bold}
+				}
+				lbl.MaxLines = 0
+				return lbl.Layout(gtx)
+			})
+		}))
+	}
+	return layout.Flex{Axis: layout.Horizontal}.Layout(gtx, cols...)
+}
+
+// ---------------------------------------------------------------------------
+// withBackground draws w on top of a filled background rect.
+// Uses op.Record to capture widget dimensions before painting the fill.
+// ---------------------------------------------------------------------------
+
+func withBackground(gtx layout.Context, bg color.NRGBA, pad unit.Dp, w layout.Widget) layout.Dimensions {
+	// Record the widget ops to learn the size, then replay with background.
+	rec := op.Record(gtx.Ops)
+	dims := layout.UniformInset(pad).Layout(gtx, w)
+	call := rec.Stop()
+
+	paint.FillShape(gtx.Ops, bg, clip.Rect{Max: dims.Size}.Op())
+	call.Add(gtx.Ops)
+	return dims
 }
